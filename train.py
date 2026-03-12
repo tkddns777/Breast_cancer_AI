@@ -1,16 +1,43 @@
 import random
 import numpy as np
 import torch
-from torch.utils.data import DataLoader,WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler
 import torch.optim as optim
 
 from Dataset import RSNADataset
 from model import EfficientNetMultiView, MultiViewResNet, BilateralModel
 
-
 import os
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, accuracy_score
+
+
+# =========================
+# EARLY STOPPING
+# =========================
+
+class EarlyStopping:
+    """Val AUC가 patience 에폭 동안 개선되지 않으면 학습 중단"""
+
+    def __init__(self, patience=5, min_delta=0.001):
+        self.patience   = patience
+        self.min_delta  = min_delta
+        self.counter    = 0
+        self.best_score = 0.0
+        self.stop       = False
+
+    def __call__(self, val_auc):
+
+        if val_auc > self.best_score + self.min_delta:
+            self.best_score = val_auc
+            self.counter    = 0
+        else:
+            self.counter += 1
+            print(f"EarlyStopping counter: {self.counter}/{self.patience}")
+            if self.counter >= self.patience:
+                self.stop = True
+
+        return self.stop
 
 
 # =========================
@@ -27,7 +54,7 @@ batch_size = 16
 model_type = "bilateral"
 num_workers = 4          # CPU 12코어 → 4 workers (데이터 로딩 병렬화)
 
-seeds = [72]
+seeds = [723]
 
 
 # =========================
@@ -165,11 +192,15 @@ if __name__ == "__main__":
 
         # WeightedRandomSampler가 배치 내 클래스를 1:1로 맞추기 때문에
         # pos_weight를 추가 적용하면 암을 과도하게 23배 이중 가중 → 제거
+        # Label Smoothing: 정답 레이블을 0/1 대신 0.05/0.95로 완화 → 과신(overconfidence) 방지
+        label_smoothing = 0.05
         criterion = torch.nn.BCEWithLogitsLoss()
 
         optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+        early_stopping = EarlyStopping(patience=5, min_delta=0.001)
 
         scaler = torch.cuda.amp.GradScaler()
 
@@ -188,30 +219,46 @@ if __name__ == "__main__":
 
             pbar = tqdm(train_loader)
 
+            # 에폭 평균 loss 추적
+            epoch_loss_sum   = 0.0
+            epoch_loss_count = 0
+
             for lcc, lmlo, rcc, rmlo, label in pbar:
 
-                lcc = lcc.to(device, non_blocking=True)
+                lcc  = lcc.to(device,  non_blocking=True)
                 lmlo = lmlo.to(device, non_blocking=True)
-                rcc = rcc.to(device, non_blocking=True)
+                rcc  = rcc.to(device,  non_blocking=True)
                 rmlo = rmlo.to(device, non_blocking=True)
 
                 label = label.unsqueeze(1).to(device, non_blocking=True)
+
+                # Label Smoothing 적용: 0 → 0.025, 1 → 0.975
+                label_smooth = label * (1 - label_smoothing) + label_smoothing * 0.5
 
                 with torch.amp.autocast("cuda"):
 
                     pred = model(lcc, lmlo, rcc, rmlo)
 
-                    loss = criterion(pred, label)
+                    loss = criterion(pred, label_smooth)
 
                 optimizer.zero_grad(set_to_none=True)   # zero_grad 메모리 최적화
 
                 scaler.scale(loss).backward()
 
+                # Gradient Clipping: 그래디언트 폭발 방지 (max_norm=1.0)
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
                 scaler.step(optimizer)
 
                 scaler.update()
 
-                pbar.set_description(f"Epoch {epoch} loss {loss.item():.4f}")
+                epoch_loss_sum   += loss.item()
+                epoch_loss_count += 1
+
+                # tqdm에 현재 배치 loss + 누적 평균 loss 동시 표시
+                avg_loss = epoch_loss_sum / epoch_loss_count
+                pbar.set_description(f"Epoch {epoch} | batch_loss {loss.item():.4f} | avg_loss {avg_loss:.4f}")
 
 
             # =========================
@@ -250,17 +297,17 @@ if __name__ == "__main__":
 
             val_loss /= len(val_loader)
 
-            val_preds = np.array(val_preds)
+            val_preds  = np.array(val_preds)
             val_labels = np.array(val_labels)
 
-            val_auc = roc_auc_score(val_labels, val_preds)
-
+            val_auc    = roc_auc_score(val_labels, val_preds)
             val_binary = (val_preds > 0.5).astype(int)
+            val_acc    = accuracy_score(val_labels, val_binary)
 
-            val_acc = accuracy_score(val_labels, val_binary)
+            # 에폭 평균 train_loss 출력
+            train_avg_loss = epoch_loss_sum / epoch_loss_count
 
-            print(f"Epoch {epoch} | val_loss {val_loss:.4f} | val_auc {val_auc:.4f} | val_acc {val_acc:.4f}")
-
+            print(f"Epoch {epoch} | train_loss(avg) {train_avg_loss:.4f} | val_loss {val_loss:.4f} | val_auc {val_auc:.4f} | val_acc {val_acc:.4f}")
 
             scheduler.step()
 
@@ -270,7 +317,12 @@ if __name__ == "__main__":
 
                 torch.save(model.state_dict(), save_path)
 
-                print("Best model saved")
+                print(f"Best model saved (AUC: {val_auc:.4f})")
+
+            # Early Stopping 체크
+            if early_stopping(val_auc):
+                print(f"\nEarly stopping triggered at epoch {epoch}. Best AUC: {early_stopping.best_score:.4f}")
+                break
 
 
         # =========================

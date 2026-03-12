@@ -21,11 +21,17 @@ class EfficientNetMultiView(nn.Module):
 
         feature_dim = self.encoder.num_features
 
+        # BatchNorm1d 추가 + Dropout 0.3 → 0.5 강화 + 중간 레이어 추가
         self.classifier = nn.Sequential(
             nn.Linear(feature_dim * 4, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(512, 1)
+            nn.Linear(256, 1)
         )
 
     def forward(self, lcc, lmlo, rcc, rmlo):
@@ -81,8 +87,10 @@ class MultiViewResNet(nn.Module):
 
         f = self.encoder.feature_dim
 
+        # BatchNorm1d 추가
         self.classifier = nn.Sequential(
             nn.Linear(f * 4, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(512, 1)
@@ -115,8 +123,10 @@ class BilateralModel(nn.Module):
 
         f = self.encoder.feature_dim
 
+        # BatchNorm1d 추가
         self.classifier = nn.Sequential(
             nn.Linear(f * 3, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(512, 1)

@@ -99,40 +99,65 @@ class RSNADataset(Dataset):
 
                 if self.transform and self.split == "train":
 
+                    # 회전: ±10도 (기존 ±12에서 약간 완화)
                     if random.random() < 0.7:
 
-                        angle = random.uniform(-12,12)
+                        angle = random.uniform(-10, 10)
 
-                        lcc = TF.rotate(lcc, angle)
+                        lcc  = TF.rotate(lcc,  angle)
                         lmlo = TF.rotate(lmlo, angle)
-                        rcc = TF.rotate(rcc, angle)
+                        rcc  = TF.rotate(rcc,  angle)
                         rmlo = TF.rotate(rmlo, angle)
 
+                    # 수평 뒤집기 (4뷰 동시 적용 → 좌우 대칭 유지)
                     if random.random() < 0.5:
 
-                        lcc = TF.hflip(lcc)
+                        lcc  = TF.hflip(lcc)
                         lmlo = TF.hflip(lmlo)
-                        rcc = TF.hflip(rcc)
+                        rcc  = TF.hflip(rcc)
                         rmlo = TF.hflip(rmlo)
 
+                    # 밝기 조정
                     if random.random() < 0.5:
 
-                        brightness = random.uniform(0.85,1.15)
+                        brightness = random.uniform(0.85, 1.15)
 
-                        lcc = TF.adjust_brightness(lcc, brightness)
+                        lcc  = TF.adjust_brightness(lcc,  brightness)
                         lmlo = TF.adjust_brightness(lmlo, brightness)
-                        rcc = TF.adjust_brightness(rcc, brightness)
+                        rcc  = TF.adjust_brightness(rcc,  brightness)
                         rmlo = TF.adjust_brightness(rmlo, brightness)
 
+                    # [추가] 대비(Contrast) 조정 - 유방촬영술에서 조직 경계 강조 효과
                     if random.random() < 0.5:
 
-                        scale = random.uniform(0.9,1.0)
+                        contrast = random.uniform(0.85, 1.15)
+
+                        lcc  = TF.adjust_contrast(lcc,  contrast)
+                        lmlo = TF.adjust_contrast(lmlo, contrast)
+                        rcc  = TF.adjust_contrast(rcc,  contrast)
+                        rmlo = TF.adjust_contrast(rmlo, contrast)
+
+                    # [추가] 가우시안 블러 - 과적합 방지 (저주파 특징 학습 유도)
+                    if random.random() < 0.3:
+
+                        kernel_size = random.choice([3, 5])
+                        sigma       = random.uniform(0.1, 1.5)
+
+                        lcc  = TF.gaussian_blur(lcc,  kernel_size, sigma)
+                        lmlo = TF.gaussian_blur(lmlo, kernel_size, sigma)
+                        rcc  = TF.gaussian_blur(rcc,  kernel_size, sigma)
+                        rmlo = TF.gaussian_blur(rmlo, kernel_size, sigma)
+
+                    # Random Crop (기존 코드)
+                    if random.random() < 0.5:
+
+                        scale = random.uniform(0.9, 1.0)
 
                         h, w = lcc.shape[1:]
                         new_h = int(h * scale)
                         new_w = int(w * scale)
 
-                        top = random.randint(0, h - new_h)
+                        top  = random.randint(0, h - new_h)
                         left = random.randint(0, w - new_w)
 
                         lcc  = TF.resized_crop(lcc,  top, left, new_h, new_w, (h, w))
