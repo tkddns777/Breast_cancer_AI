@@ -54,7 +54,7 @@ batch_size = 16
 model_type = "bilateral"
 num_workers = 4          # CPU 12코어 → 4 workers (데이터 로딩 병렬화)
 
-seeds = [723]
+seeds = [100, 200, 300]   # 여러 시드로 실험하여 평균 성능 평가
 
 
 # =========================
